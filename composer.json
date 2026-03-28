@@ -1,5 +1,6 @@
 {
     "name": "nativephp/mobile",
+    "version": "3.1.99",
     "description": "NativePHP for Mobile",
     "keywords": [
         "nativephp",

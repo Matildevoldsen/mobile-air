@@ -924,9 +924,9 @@ SECTION;
         $newPods = collect($podsToAdd)
             ->filter(function ($pod) use ($podfile) {
                 $name = $pod['name'];
-                // Check if pod exists outside of our managed marker section
+                // Check if pod exists outside of our plugin dependencies section
                 $podfileWithoutSection = preg_replace(
-                    '/# NATIVEPHP_PLUGIN_PODS_START\n.*?# NATIVEPHP_PLUGIN_PODS_END/s',
+                    '/# NativePHP Plugin Dependencies\n(?:[ \t]*pod\s+\'[^\']+\'(?:,\s*\'[^\']+\')?\n?)*/s',
                     '',
                     $podfile
                 );
@@ -934,7 +934,7 @@ SECTION;
                 return ! preg_match("/pod\s+['\"]".preg_quote($name, '/')."['\"]/", $podfileWithoutSection);
             });
 
-        // Build the new plugin pods lines
+        // Build the new plugin pods section
         $newPodLines = $newPods
             ->map(function ($pod) {
                 $name = $pod['name'];
@@ -948,22 +948,53 @@ SECTION;
             })
             ->implode("\n");
 
-        $pluginContent = $newPods->isNotEmpty() ? "\n{$newPodLines}\n  " : "\n  ";
+        // Remove existing plugin dependencies section (if any)
+        $podfile = preg_replace(
+            '/[ \t]*# NativePHP Plugin Dependencies\n(?:[ \t]*pod\s+\'[^\']+\'(?:,\s*\'[^\']+\')?\n?)*/s',
+            '',
+            $podfile
+        );
 
-        // Replace everything between the start/end markers, preserving the markers
-        if (preg_match('/# NATIVEPHP_PLUGIN_PODS_START.*?# NATIVEPHP_PLUGIN_PODS_END/s', $podfile)) {
-            $podfile = preg_replace(
-                '/# NATIVEPHP_PLUGIN_PODS_START.*?# NATIVEPHP_PLUGIN_PODS_END/s',
-                "# NATIVEPHP_PLUGIN_PODS_START{$pluginContent}# NATIVEPHP_PLUGIN_PODS_END",
-                $podfile
-            );
-        } elseif (str_contains($podfile, '# NATIVEPHP_PLUGIN_PODS')) {
-            // Migrate old single marker to new start/end markers
+        // If no new pods to add, just save cleaned podfile
+        if ($newPods->isEmpty()) {
+            $this->files->put($podfilePath, $podfile);
+
+            return;
+        }
+
+        // Check if marker exists (preferred injection point)
+        if (str_contains($podfile, '# NATIVEPHP_PLUGIN_PODS')) {
             $podfile = str_replace(
                 '# NATIVEPHP_PLUGIN_PODS',
-                "# NATIVEPHP_PLUGIN_PODS_START{$pluginContent}# NATIVEPHP_PLUGIN_PODS_END",
+                "# NativePHP Plugin Dependencies\n{$newPodLines}",
                 $podfile
             );
+        } else {
+            // Find the NativePHP target block and insert before its 'end'
+            // Use a more precise pattern that only matches within the target block
+            $lines = explode("\n", $podfile);
+            $result = [];
+            $inNativePHPTarget = false;
+            $inserted = false;
+
+            foreach ($lines as $line) {
+                // Detect start of NativePHP target (not simulator)
+                if (preg_match('/^target\s+[\'"]NativePHP[\'"]\s+do/', $line)) {
+                    $inNativePHPTarget = true;
+                }
+
+                // If we're in the target and hit 'end', insert pods before it
+                if ($inNativePHPTarget && ! $inserted && preg_match('/^end\s*$/', $line)) {
+                    $result[] = '  # NativePHP Plugin Dependencies';
+                    $result[] = $newPodLines;
+                    $inserted = true;
+                    $inNativePHPTarget = false;
+                }
+
+                $result[] = $line;
+            }
+
+            $podfile = implode("\n", $result);
         }
 
         $this->files->put($podfilePath, $podfile);
@@ -979,8 +1010,7 @@ platform :ios, '15.0'
 use_frameworks!
 
 target 'NativePHP' do
-  # NATIVEPHP_PLUGIN_PODS_START
-  # NATIVEPHP_PLUGIN_PODS_END
+  # NATIVEPHP_PLUGIN_PODS
 end
 
 post_install do |installer|

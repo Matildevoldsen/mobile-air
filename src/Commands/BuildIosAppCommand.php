@@ -335,12 +335,29 @@ class BuildIosAppCommand extends Command
 
     private function updateBundleIdForTarget(string $bundleId): void
     {
-        Process::path($this->xcodeProjectPath)
-            ->run([
-                'sed', '-i', null, '-E',
-                "/com\\.nativephp\\.(NativePHPTests|NativePHPUITests)/! s/(PRODUCT_BUNDLE_IDENTIFIER = ).*(;)/\\1{$bundleId}\\2/",
-                'project.pbxproj',
-            ]);
+        $projectPath = $this->xcodeProjectPath.'/project.pbxproj';
+        $content = file_get_contents($projectPath);
+
+        // Replace all PRODUCT_BUNDLE_IDENTIFIER values with $bundleId, except:
+        // 1. Test targets (com.nativephp.NativePHPTests / NativePHPUITests)
+        // 2. Extension targets already set to a sub-path of $bundleId (e.g. com.xan.app.widget)
+        $content = preg_replace_callback(
+            '/(PRODUCT_BUNDLE_IDENTIFIER = )([^;]+)(;)/',
+            function (array $match) use ($bundleId): string {
+                $current = trim($match[2]);
+                if (preg_match('/^com\.nativephp\.(NativePHPTests|NativePHPUITests)$/', $current)) {
+                    return $match[0];
+                }
+                if (str_starts_with($current, $bundleId.'.')) {
+                    return $match[0];
+                }
+
+                return $match[1].$bundleId.$match[3];
+            },
+            $content
+        );
+
+        file_put_contents($projectPath, $content);
     }
 
     /**

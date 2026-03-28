@@ -77,7 +77,7 @@ class NativeUIState: ObservableObject {
 
         if let topBar = topBar,
            let topBarData = NativeUIParser.parseTopBarData(from: topBar) {
-            print("✅ NativeUIState: Set topBarData with title: \(topBarData.title ?? "nil")")
+            print("✅ NativeUIState: Set topBarData")
             self.topBarData = topBarData
         } else {
             print("⚠️ NativeUIState: No top_bar component found")

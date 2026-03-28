@@ -298,20 +298,6 @@ class MainActivity : FragmentActivity(), WebViewProvider {
     }
 
     private fun handleDeepLinkIntent(intent: Intent?) {
-        // Check for notification URL extra (from local notification taps)
-        val notificationUrl = intent?.getStringExtra("notification_url")
-        if (!notificationUrl.isNullOrEmpty()) {
-            Log.d("DeepLink", "🔔 Notification URL: $notificationUrl")
-            pendingDeepLink = notificationUrl
-            if (::laravelEnv.isInitialized && ::webViewManager.isInitialized) {
-                val fullUrl = "http://127.0.0.1$notificationUrl"
-                Log.d("DeepLink", "🚀 Loading notification URL immediately: $fullUrl")
-                webView.loadUrl(fullUrl)
-                pendingDeepLink = null
-            }
-            return
-        }
-
         val uri = intent?.data ?: return
         Log.d("DeepLink", "🌐 Received deep link: $uri")
 
@@ -752,9 +738,7 @@ class MainActivity : FragmentActivity(), WebViewProvider {
     }
 
     /**
-     * Navigate using Inertia router if available, otherwise fall back to direct navigation.
-     * This allows native edge component clicks to integrate with Inertia.js for SPA-like
-     * navigation while maintaining compatibility with non-Inertia apps.
+     * NativePHP page navigation must use full WebView navigations under the php:// protocol.
      */
     private fun navigateWithInertia(url: String) {
         val path = extractPath(url)
@@ -767,15 +751,7 @@ class MainActivity : FragmentActivity(), WebViewProvider {
             (function() {
                 var path = "$escapedPath";
                 console.log('[NativePHP] Navigation requested:', path);
-
-                // Check if Inertia router is available
-                if (typeof window.router !== 'undefined' && typeof window.router.visit === 'function') {
-                    console.log('[NativePHP] Using Inertia router.visit():', path);
-                    window.router.visit(path);
-                } else {
-                    console.log('[NativePHP] Inertia not available, using location.href');
-                    window.location.href = path;
-                }
+                window.location.assign(path);
             })();
         """.trimIndent()
 

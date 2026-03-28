@@ -140,19 +140,13 @@ class RunCommand extends Command
     protected function checkForPhpBinaryUpdates(): bool
     {
         try {
-            $jsonPath = base_path('nativephp.json');
+            $installedFile = base_path('nativephp/binaries/INSTALLED');
 
-            if (! file_exists($jsonPath)) {
+            if (! file_exists($installedFile)) {
                 return true;
             }
 
-            $nativephp = json_decode(file_get_contents($jsonPath), true) ?? [];
-            $installedVersion = $nativephp['php']['version'] ?? null;
-
-            if (! $installedVersion) {
-                return true;
-            }
-
+            $installedVersion = trim(file_get_contents($installedFile));
             $parts = explode('.', $installedVersion);
             $installedMinor = $parts[0].'.'.$parts[1];
             $runningMinor = PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;

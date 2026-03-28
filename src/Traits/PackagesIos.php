@@ -19,7 +19,7 @@ trait PackagesIos
     {
         // If test-upload flag is set, just test upload without building
         if ($this->option('test-upload')) {
-            $this->testAppStoreUpload();
+            $this->testAppStoreUpload(null, $iosSigningConfig);
 
             return;
         }
@@ -255,16 +255,34 @@ trait PackagesIos
             Process::run('rm -rf '.escapeshellarg($exportPath));
         }
 
+        $command = [
+            'xcodebuild',
+            '-exportArchive',
+            '-archivePath', $archivePath,
+            '-exportPath', $exportPath,
+            '-exportOptionsPlist', $exportOptionsPath,
+            '-allowProvisioningUpdates',
+        ];
+
+        // Pass API key for automatic provisioning profile creation/download
+        $apiKeyPath = $this->option('api-key-path') ?: $this->option('api-key');
+        $apiKeyId = $this->option('api-key-id');
+        $apiIssuerId = $this->option('api-issuer-id');
+        if ($apiKeyPath && $apiKeyId && $apiIssuerId) {
+            $resolvedKeyPath = $this->resolveCredentialFromPath($apiKeyPath);
+            if ($resolvedKeyPath && file_exists($resolvedKeyPath)) {
+                $command[] = '-authenticationKeyPath';
+                $command[] = $resolvedKeyPath;
+                $command[] = '-authenticationKeyID';
+                $command[] = $apiKeyId;
+                $command[] = '-authenticationKeyIssuerID';
+                $command[] = $apiIssuerId;
+            }
+        }
+
         $result = Process::path($basePath)
             ->timeout(600)
-            ->run([
-                'xcodebuild',
-                '-exportArchive',
-                '-archivePath', $archivePath,
-                '-exportPath', $exportPath,
-                '-exportOptionsPlist', $exportOptionsPath,
-                // Remove -allowProvisioningUpdates to prevent Xcode from overriding our custom entitlements
-            ]);
+            ->run($command);
 
         if (! $result->successful()) {
             \Laravel\Prompts\error('IPA export failed');
@@ -509,6 +527,11 @@ trait PackagesIos
             $exportMethod = 'debugging';
         }
 
+        // Use modern method name
+        if ($exportMethod === 'app-store') {
+            $exportMethod = 'app-store-connect';
+        }
+
         $teamId = $this->getTeamId($iosSigningConfig);
         $exportOptions = [
             'method' => $exportMethod,
@@ -523,10 +546,6 @@ trait PackagesIos
         // Use automatic for debugging only; manual for everything else (app-store, ad-hoc, enterprise, etc.)
         if ($exportMethod === 'debugging') {
             $exportOptions['signingStyle'] = 'automatic';
-        } else {
-            $exportOptions['signingStyle'] = 'manual';
-            // Use Apple Distribution for modern signing
-            $exportOptions['signingCertificate'] = 'Apple Distribution';
         }
 
         if ($exportMethod !== 'debugging') {
@@ -534,14 +553,19 @@ trait PackagesIos
             $name = $uuid ? null : $this->getProvisioningProfile($appId, $exportMethod);
 
             if ($uuid) {
+                $exportOptions['signingStyle'] = 'manual';
+                $exportOptions['signingCertificate'] = 'Apple Distribution';
                 $exportOptions['provisioningProfiles'] = [$appId => $uuid];
                 $this->components->twoColumnDetail('Provisioning profile', $uuid);
             } elseif ($name && $name !== '*') {
+                $exportOptions['signingStyle'] = 'manual';
+                $exportOptions['signingCertificate'] = 'Apple Distribution';
                 $exportOptions['provisioningProfiles'] = [$appId => $name];
                 $this->components->twoColumnDetail('Provisioning profile', $name);
             } else {
-                \Laravel\Prompts\error('No deterministic provisioning profile available (UUID or explicit name)');
-                throw new \Exception('Missing deterministic provisioning profile for distribution build');
+                // No provisioning profile — fall back to automatic signing (requires local keychain certs)
+                $exportOptions['signingStyle'] = 'automatic';
+                $this->components->twoColumnDetail('Signing style', 'automatic (no profile provided)');
             }
         }
 
@@ -636,7 +660,7 @@ trait PackagesIos
             return $extractedProfileName;
         }
 
-        if (in_array($exportMethod, ['app-store', 'ad-hoc', 'enterprise'])) {
+        if (in_array($exportMethod, ['app-store', 'app-store-connect', 'ad-hoc', 'enterprise'])) {
             return null;
         }
 
@@ -897,7 +921,7 @@ trait PackagesIos
         }
     }
 
-    public function testAppStoreUpload(?string $ipaPath = null): void
+    public function testAppStoreUpload(?string $ipaPath = null, ?array $iosSigningConfig = null): void
     {
         $ipaPath = $ipaPath ?: base_path('nativephp/ios/build/export/NativePHP.ipa');
 
@@ -908,7 +932,7 @@ trait PackagesIos
         }
 
         $this->components->twoColumnDetail('Testing upload', $ipaPath);
-        $this->uploadToAppStore($ipaPath);
+        $this->uploadToAppStore($ipaPath, $iosSigningConfig);
     }
 
     /**

@@ -4,7 +4,11 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.*
@@ -12,6 +16,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 private const val TAG = "NativeTopBar"
@@ -44,6 +50,27 @@ fun NativeTopBar(
     val overflowActions = actions.drop(3)
     val showOverflowMenu = remember { mutableStateOf(false) }
 
+    fun handleAction(action: TopBarAction) {
+        Log.d(TAG, "⚡ Action clicked: ${action.label ?: action.id}")
+        action.url?.let { url ->
+            if (isExternalUrl(url)) {
+                Log.d(TAG, "🌐 Opening external URL in browser: $url")
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to open external URL: $url", e)
+                }
+            } else {
+                Log.d(TAG, "📱 Opening internal URL in WebView: $url")
+                onNavigate(url)
+            }
+        }
+        action.event?.let {
+            Log.d(TAG, "📢 Dispatching event: $it")
+        }
+    }
+
     TopAppBar(
         modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
         title = {
@@ -65,10 +92,13 @@ fun NativeTopBar(
             if (data.showNavigationIcon == true) {
                 IconButton(onClick = {
                     Log.d(TAG, "🍔 Navigation icon clicked")
-                    // Open the drawer via NativeUIState
-                    scope.launch {
-                        NativeUIState.drawerState?.open()
-                        Log.d(TAG, "✅ Drawer opened!")
+                    if (NativeUIState.drawerState != null) {
+                        scope.launch {
+                            NativeUIState.drawerState?.open()
+                            Log.d(TAG, "✅ Drawer opened!")
+                        }
+                    } else {
+                        onNavigate("/native/open-sidebar")
                     }
                     onMenuClick()
                 }) {
@@ -83,34 +113,40 @@ fun NativeTopBar(
         actions = {
             // Render visible actions (max 3)
             visibleActions.forEach { action ->
-                IconButton(
-                    onClick = {
-                        Log.d(TAG, "⚡ Action clicked: ${action.label ?: action.id}")
-                        action.url?.let { url ->
-                            if (isExternalUrl(url)) {
-                                Log.d(TAG, "🌐 Opening external URL in browser: $url")
-                                try {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Failed to open external URL: $url", e)
-                                }
-                            } else {
-                                Log.d(TAG, "📱 Opening internal URL in WebView: $url")
-                                onNavigate(url)
+                if (action.showLabel == true && !action.label.isNullOrBlank()) {
+                    TextButton(
+                        onClick = { handleAction(action) },
+                        modifier = Modifier.widthIn(max = 180.dp),
+                    ) {
+                        Row {
+                            if (action.icon.isNotBlank()) {
+                                MaterialIcon(
+                                    name = action.icon,
+                                    contentDescription = action.label ?: action.id,
+                                    size = 18.dp,
+                                    tint = textColor ?: MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
                             }
-                        }
-                        action.event?.let {
-                            // Dispatch event if specified
-                            Log.d(TAG, "📢 Dispatching event: $it")
+
+                            Text(
+                                text = action.label,
+                                color = textColor ?: MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
-                ) {
-                    MaterialIcon(
-                        name = action.icon,
-                        contentDescription = action.label ?: action.id,
-                        tint = textColor ?: MaterialTheme.colorScheme.onSurface
-                    )
+                } else {
+                    IconButton(
+                        onClick = { handleAction(action) }
+                    ) {
+                        MaterialIcon(
+                            name = action.icon,
+                            contentDescription = action.label ?: action.id,
+                            tint = textColor ?: MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
 
@@ -133,24 +169,7 @@ fun NativeTopBar(
                             text = { Text(action.label ?: action.id) },
                             onClick = {
                                 showOverflowMenu.value = false
-                                Log.d(TAG, "⚡ Overflow action clicked: ${action.label ?: action.id}")
-                                action.url?.let { url ->
-                                    if (isExternalUrl(url)) {
-                                        Log.d(TAG, "🌐 Opening external URL in browser: $url")
-                                        try {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                            context.startActivity(intent)
-                                        } catch (e: Exception) {
-                                            Log.e(TAG, "Failed to open external URL: $url", e)
-                                        }
-                                    } else {
-                                        Log.d(TAG, "📱 Opening internal URL in WebView: $url")
-                                        onNavigate(url)
-                                    }
-                                }
-                                action.event?.let {
-                                    Log.d(TAG, "📢 Dispatching event: $it")
-                                }
+                                handleAction(action)
                             },
                             leadingIcon = {
                                 MaterialIcon(

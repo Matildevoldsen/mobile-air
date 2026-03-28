@@ -14,6 +14,7 @@ class TopBarAction extends EdgeComponent
         public ?string $label = null,
         public ?string $url = null,
         public ?string $event = null,
+        public bool $showLabel = false,
     ) {}
 
     protected function requiredProps(): array
@@ -29,6 +30,7 @@ class TopBarAction extends EdgeComponent
             'label' => $this->label,
             'url' => $this->url,
             'event' => $this->event,
+            'show_label' => $this->showLabel,
         ];
     }
 }

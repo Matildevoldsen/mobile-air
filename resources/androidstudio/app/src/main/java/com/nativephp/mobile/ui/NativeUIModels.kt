@@ -158,7 +158,9 @@ data class TopBarAction(
     val icon: String,
     val label: String? = null,
     val url: String? = null,
-    val event: String? = null
+    val event: String? = null,
+    @SerializedName("show_label")
+    val showLabel: Boolean? = false,
 )
 
 /**

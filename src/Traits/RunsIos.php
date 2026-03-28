@@ -76,7 +76,7 @@ trait RunsIos
                     return false;
                 }
 
-                if ($d['category'] === 'Devices') {
+                if ($d['category'] === 'Devices' || str_contains($d['category'], 'Offline')) {
                     return true;
                 }
 
@@ -151,10 +151,6 @@ trait RunsIos
                 continue;
             }
 
-            if (str_contains($category, 'Offline')) {
-                continue;
-            }
-
             preg_match('/^(.+?)(?:\s+\(([^)]+)\))?\s+\(([^)]+)\)$/', $line, $matches);
 
             if (count($matches) === 4) {
@@ -173,9 +169,10 @@ trait RunsIos
 
                 $devices[] = $device;
 
-                match ($category) {
-                    'Devices' => $this->devices[$udid] = $device,
-                    'Simulators' => $this->simulators[$udid] = $device,
+                match (true) {
+                    $category === 'Devices' => $this->devices[$udid] = $device,
+                    str_contains($category, 'Offline') => $this->devices[$udid] = $device,
+                    $category === 'Simulators' => $this->simulators[$udid] = $device,
                     default => null
                 };
             }

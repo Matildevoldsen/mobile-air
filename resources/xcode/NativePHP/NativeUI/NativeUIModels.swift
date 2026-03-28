@@ -207,6 +207,17 @@ struct TopBarData: Codable, Equatable {
         case backgroundColor = "background_color"
         case textColor = "text_color"
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
+        showNavigationIcon = try container.decodeIfPresent(Bool.self, forKey: .showNavigationIcon)
+        backgroundColor = try container.decodeIfPresent(String.self, forKey: .backgroundColor)
+        textColor = try container.decodeIfPresent(String.self, forKey: .textColor)
+        elevation = try container.decodeIfPresent(Int.self, forKey: .elevation)
+        children = try container.decodeIfPresent([TopBarActionComponent].self, forKey: .children)
+    }
 }
 
 struct TopBarActionComponent: Codable, Equatable {
@@ -219,6 +230,21 @@ struct TopBarAction: Codable, Equatable {
     let label: String
     let url: String
     let icon: String
+    let showLabel: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, url, icon
+        case showLabel = "show_label"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
+        label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
+        url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
+        icon = try container.decodeIfPresent(String.self, forKey: .icon) ?? ""
+        showLabel = try container.decodeIfPresent(Bool.self, forKey: .showLabel)
+    }
 }
 
 // MARK: - NativeUI Parser

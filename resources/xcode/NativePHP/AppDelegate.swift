@@ -26,6 +26,14 @@ extension Notification.Name {
 
     /// Posted when app enters background
     static let didEnterBackground = Notification.Name("NativePHP.didEnterBackground")
+
+    /// Posted when app is opened from a Home Screen quick action
+    /// userInfo: ["shortcutItem": UIApplicationShortcutItem, "source": String]
+    static let didReceiveShortcutItem = Notification.Name("NativePHP.didReceiveShortcutItem")
+
+    /// Posted when app continues a non-web user activity, such as Spotlight results
+    /// userInfo: ["userActivity": NSUserActivity, "source": String]
+    static let didContinueUserActivity = Notification.Name("NativePHP.didContinueUserActivity")
 }
 
 class AppDelegate: NSObject, UIApplicationDelegate {
@@ -62,6 +70,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         continue userActivity: NSUserActivity,
         restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void
     ) -> Bool {
+        NotificationCenter.default.post(
+            name: .didContinueUserActivity,
+            object: nil,
+            userInfo: [
+                "userActivity": userActivity,
+                "source": "app-delegate",
+            ]
+        )
+
         // Check if this is a Universal Link
         if userActivity.activityType == NSUserActivityTypeBrowsingWeb,
            let url = userActivity.webpageURL {
@@ -71,6 +88,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
 
         return false
+    }
+
+    func application(
+        _ application: UIApplication,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        NotificationCenter.default.post(
+            name: .didReceiveShortcutItem,
+            object: nil,
+            userInfo: [
+                "shortcutItem": shortcutItem,
+                "source": "app-delegate",
+            ]
+        )
+
+        completionHandler(true)
     }
 
     // MARK: - Push Notification Token Handling (forwards to plugins via NotificationCenter)

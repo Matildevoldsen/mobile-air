@@ -1,5 +1,12 @@
 import SwiftUI
 import WebKit
+import ObjectiveC.runtime
+
+private final class KeyboardAccessoryHider: NSObject {
+    @objc var noInputAccessoryView: Any? {
+        nil
+    }
+}
 
 extension NSNotification.Name {
     public static let reloadWebViewNotification = NSNotification.Name("ReloadWebViewNotification")
@@ -16,6 +23,11 @@ struct ContentView: View {
             WebViewLayoutContainer(onTabSelected: handleNavigation)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .safeAreaInset(edge: .top, spacing: 0) {
+                    if uiState.hasTopBar() {
+                        Color.clear.frame(height: 44)
+                    }
+                }
+                .overlay(alignment: .top) {
                     if uiState.hasTopBar() {
                         NativeTopBar(onNavigate: handleNavigation)
                     }
@@ -140,13 +152,23 @@ struct WebViewLayoutContainer: View {
             // No bottom nav - WebView fills entire screen
             WebView(shared: SharedWebView.shared, horizontalSizeClass: horizontalSizeClass)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(.all, edges: uiState.hasTopBar() ? [.horizontal, .bottom] : .all)
+                .ignoresSafeArea(.all, edges: uiState.hasTopBar() ? [.horizontal, .top, .bottom] : .all)
         }
     }
 }
 
 struct WebView: UIViewRepresentable {
     static let dataStore = WKWebsiteDataStore.nonPersistent()
+    static func makeFreshRequest(url: URL) -> URLRequest {
+        var request = URLRequest(
+            url: url,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 30
+        )
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        return request
+    }
     let shared: SharedWebView
     let horizontalSizeClass: UserInterfaceSizeClass?
 
@@ -238,6 +260,35 @@ struct WebView: UIViewRepresentable {
             injectSafeAreaInsets(webView)
         }
 
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            showWebViewFailureOverlay(
+                title: "WKWebView Navigation Failed",
+                message: "\(error.localizedDescription)\nURL: \(webView.url?.absoluteString ?? "unknown")"
+            )
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            // NSURLErrorCancelled (-999) is fired whenever we intentionally call
+            // decisionHandler(.cancel) in decidePolicyFor (e.g. routing external https
+            // URLs to the system browser, or stopping a load before redirecting).
+            // These are expected — do not show the blocking error overlay for them.
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+                return
+            }
+            showWebViewFailureOverlay(
+                title: "WKWebView Provisional Navigation Failed",
+                message: "\(error.localizedDescription)\nURL: \(webView.url?.absoluteString ?? "unknown")"
+            )
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            showWebViewFailureOverlay(
+                title: "WKWebView Process Terminated",
+                message: "The web content process terminated unexpectedly."
+            )
+        }
+
         private func injectSafeAreaInsets(_ webView: WKWebView) {
             // Get insets from window scene (more reliable than webView.window which can be nil)
             let windowScene = UIApplication.shared.connectedScenes
@@ -264,6 +315,43 @@ struct WebView: UIViewRepresentable {
             """
 
             webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+
+        private func showWebViewFailureOverlay(title: String, message: String) {
+            print("⚠️ \(title): \(message)")
+
+            DispatchQueue.main.async {
+                guard let scene = UIApplication.shared.connectedScenes
+                    .compactMap({ $0 as? UIWindowScene })
+                    .first(where: { $0.activationState == .foregroundActive })
+                    ?? UIApplication.shared.connectedScenes
+                        .compactMap({ $0 as? UIWindowScene }).first,
+                      let window = scene.windows.first(where: { $0.isKeyWindow })
+                        ?? scene.windows.first else {
+                    return
+                }
+
+                let overlayTag = 999_112
+
+                if let existing = window.viewWithTag(overlayTag) as? UITextView {
+                    existing.text = "\(title)\n\n\(message)"
+                    return
+                }
+
+                let overlay = UITextView(frame: window.bounds)
+                overlay.tag = overlayTag
+                overlay.isEditable = false
+                overlay.isSelectable = true
+                overlay.backgroundColor = UIColor.systemRed.withAlphaComponent(0.96)
+                overlay.textColor = .white
+                overlay.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+                overlay.textContainerInset = UIEdgeInsets(top: 18, left: 16, bottom: 18, right: 16)
+                overlay.text = "\(title)\n\n\(message)"
+                overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
+                window.addSubview(overlay)
+                window.bringSubviewToFront(overlay)
+            }
         }
 
         @MainActor
@@ -337,7 +425,11 @@ struct WebView: UIViewRepresentable {
         @objc func reloadWebView() {
             _ = NativePHPApp.shared?.artisan(additionalArgs: ["view:clear"])
 
-            self.webView?.reload()
+            if let url = self.webView?.url {
+                self.webView?.load(WebView.makeFreshRequest(url: url))
+            } else {
+                self.webView?.reloadFromOrigin()
+            }
         }
 
         // Swipe gestures disabled for back/forward navigation
@@ -361,13 +453,12 @@ struct WebView: UIViewRepresentable {
                         self.webView?.stopLoading()
                     }
 
-                    self.webView?.load(URLRequest(url: url))
+                    self.webView?.load(WebView.makeFreshRequest(url: url))
                 }
             }
         }
 
-        /// Navigate using Inertia router if available, otherwise fall back to location.href
-        /// This allows native edge component clicks to integrate with Inertia.js for SPA-like navigation
+        /// NativePHP page navigation must use full WebView navigations under the php:// protocol.
         @objc func navigateWithInertia(_ notification: Notification) {
             guard let path = notification.userInfo?["path"] as? String else { return }
 
@@ -381,14 +472,27 @@ struct WebView: UIViewRepresentable {
                 var path = "\(escapedPath)";
                 console.log('[NativePHP] Navigation requested:', path);
 
-                // Check if Inertia router is available
-                if (typeof window.router !== 'undefined' && typeof window.router.visit === 'function') {
-                    console.log('[NativePHP] Using Inertia router.visit():', path);
-                    window.router.visit(path);
-                } else {
-                    console.log('[NativePHP] Inertia not available, using location.href');
-                    window.location.href = path;
+                if (path === '/native/open-search') {
+                    window.dispatchEvent(new CustomEvent('native:open-search'));
+                    return;
                 }
+
+                if (path === '/native/open-model-selector') {
+                    window.dispatchEvent(new CustomEvent('native:open-model-selector'));
+                    return;
+                }
+
+                if (path === '/native/open-sidebar') {
+                    window.dispatchEvent(new CustomEvent('native:open-sidebar'));
+                    return;
+                }
+
+                if (path === '/native/new-chat') {
+                    window.location.assign('/');
+                    return;
+                }
+
+                window.location.assign(path);
             })();
             """
 
@@ -416,6 +520,11 @@ struct WebView: UIViewRepresentable {
             coordinator.webView = existingWebView
             existingWebView.navigationDelegate = coordinator
             existingWebView.alpha = 1.0
+            disableKeyboardAssistant(for: existingWebView)
+
+            if let currentURL = existingWebView.url {
+                existingWebView.load(WebView.makeFreshRequest(url: currentURL))
+            }
 
             // Observers are still registered (we don't remove them in dismantleUIView)
             // LaravelBridge is still connected (we don't clear it in dismantleUIView)
@@ -436,6 +545,7 @@ struct WebView: UIViewRepresentable {
         webConfiguration.allowsInlineMediaPlayback = true
 
         let webView = WKWebView(frame: .zero, configuration: webConfiguration)
+        disableKeyboardAssistant(for: webView)
 
         // Store webView in coordinator and shared instance
         coordinator.webView = webView
@@ -454,8 +564,9 @@ struct WebView: UIViewRepresentable {
         let fallbackPath = Bundle.main.path(forResource: "index", ofType: "html")
         let fallbackURL = URL(fileURLWithPath: fallbackPath!)
 
-        // Set initial opacity to 0 for smooth fade-in (instead of hiding)
-        webView.alpha = 0.0
+        // Keep the WebView visible during startup so failed navigations do not
+        // collapse into an indistinguishable blank white screen.
+        webView.alpha = 1.0
 
         // Give AppDelegate time to process any launch deep links before deciding what to load
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -473,9 +584,18 @@ struct WebView: UIViewRepresentable {
                 DebugLogger.shared.log("🌐 No pending deep link, loading default URL")
                 let startPath = NativePHPApp.getStartURL()
                 let startPage = URL(string: "php://127.0.0.1\(startPath)")
-                webView.load(URLRequest(url: startPage ?? fallbackURL))
+                webView.load(WebView.makeFreshRequest(url: startPage ?? fallbackURL))
             } else {
                 DebugLogger.shared.log("🌐 Pending deep link detected, skipping default URL load")
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.25) {
+            if webView.url == nil && !webView.isLoading {
+                DebugLogger.shared.log("🌐 Fallback load triggered because WKWebView has no URL after startup")
+                let startPath = NativePHPApp.getStartURL()
+                let startPage = URL(string: "php://127.0.0.1\(startPath)")
+                webView.load(WebView.makeFreshRequest(url: startPage ?? fallbackURL))
             }
         }
 
@@ -524,6 +644,51 @@ struct WebView: UIViewRepresentable {
         )
 
         return webView
+    }
+
+    private func disableKeyboardAssistant(for webView: WKWebView) {
+        let inputAssistantItem = webView.inputAssistantItem
+        inputAssistantItem.leadingBarButtonGroups = []
+        inputAssistantItem.trailingBarButtonGroups = []
+        removeFormAccessoryBar(from: webView)
+    }
+
+    private func removeFormAccessoryBar(from webView: WKWebView) {
+        guard let targetView = webView.scrollView.subviews.first(where: {
+            NSStringFromClass(type(of: $0)).hasPrefix("WKContent")
+        }) else {
+            return
+        }
+
+        guard let targetViewClass = object_getClass(targetView) else {
+            return
+        }
+
+        let subclassName = "\(NSStringFromClass(targetViewClass).replacingOccurrences(of: ".", with: "_"))_NoInputAccessoryView"
+
+        if let existingClass = NSClassFromString(subclassName) {
+            object_setClass(targetView, existingClass)
+            targetView.reloadInputViews()
+            return
+        }
+
+        guard let subclass = objc_allocateClassPair(targetViewClass, subclassName, 0),
+              let method = class_getInstanceMethod(
+                  KeyboardAccessoryHider.self,
+                  #selector(getter: KeyboardAccessoryHider.noInputAccessoryView)
+              ) else {
+            return
+        }
+
+        class_addMethod(
+            subclass,
+            #selector(getter: UIResponder.inputAccessoryView),
+            method_getImplementation(method),
+            method_getTypeEncoding(method)
+        )
+        objc_registerClassPair(subclass)
+        object_setClass(targetView, subclass)
+        targetView.reloadInputViews()
     }
 
     func addDebugSupport(webView: WKWebView, context: Context) {

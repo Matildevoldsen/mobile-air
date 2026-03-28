@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Vite;
 use Native\Mobile\Commands\BuildIosAppCommand;
 use Native\Mobile\Commands\CheckBuildNumberCommand;
 use Native\Mobile\Commands\CredentialsCommand;
-use Native\Mobile\Commands\DebugCommand;
 use Native\Mobile\Commands\InstallCommand;
 use Native\Mobile\Commands\JumpCommand;
 use Native\Mobile\Commands\LaunchEmulatorCommand;
@@ -52,7 +51,6 @@ class NativeServiceProvider extends PackageServiceProvider
                 BuildIosAppCommand::class,
                 CheckBuildNumberCommand::class,
                 CredentialsCommand::class,
-                DebugCommand::class,
                 InstallCommand::class,
                 RunCommand::class,
                 OpenProjectCommand::class,
