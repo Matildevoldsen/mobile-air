@@ -3,6 +3,8 @@ import SwiftUI
 /// A view that replicates the launch screen appearance.
 /// This allows the app to appear launched while heavy initialization continues in the background.
 struct SplashView: View {
+    @ObservedObject private var appState = AppState.shared
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -17,6 +19,19 @@ struct SplashView: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
                     .ignoresSafeArea()
+
+                if let startupFailure = appState.startupFailure {
+                    ScrollView {
+                        Text(startupFailure)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .textSelection(.enabled)
+                            .padding(16)
+                    }
+                    .background(Color.red.opacity(0.95))
+                    .ignoresSafeArea()
+                }
             }
         }
         .ignoresSafeArea()

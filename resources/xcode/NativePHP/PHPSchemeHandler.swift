@@ -391,6 +391,26 @@ class PHPSchemeHandler: NSObject, WKURLSchemeHandler {
         return NSError(domain: "PHPAppSchemeHandler", code: code, userInfo: [NSLocalizedDescriptionKey: description])
     }
 
+    private func splitRawResponse(_ responseString: String) -> (headers: String, body: String, separator: String)? {
+        if let range = responseString.range(of: "\r\n\r\n") {
+            return (
+                headers: String(responseString[..<range.lowerBound]),
+                body: String(responseString[range.upperBound...]),
+                separator: "\\r\\n\\r\\n"
+            )
+        }
+
+        if let range = responseString.range(of: "\n\n") {
+            return (
+                headers: String(responseString[..<range.lowerBound]),
+                body: String(responseString[range.upperBound...]),
+                separator: "\\n\\n"
+            )
+        }
+
+        return nil
+    }
+
     private func forwardToPHP(requestData: RequestData, schemeTask: WKURLSchemeTask, redirectCount: Int = 0) {
         getResponse(request: requestData) { result in
             guard self.isTaskActive(schemeTask) else { return }
@@ -406,17 +426,17 @@ class PHPSchemeHandler: NSObject, WKURLSchemeHandler {
                     return
                 }
 
-                // Split headers and body
+                // Split headers and body at the first separator only.
+                // HTML responses can legally contain additional blank lines later in the body.
                 print("Processing response...")
-                let components = responseString.components(separatedBy: "\r\n\r\n")
-                guard components.count >= 2 else {
+                guard let responseParts = self.splitRawResponse(responseString) else {
                     // Send the error as a response to the WebView
                     guard let httpResponse = HTTPURLResponse(url: URL(string: requestData.uri)!,
                                                              statusCode: 500,
                                                              httpVersion: "HTTP/1.1",
                                                              headerFields: [
                                                                 "Content-Type": "text/html",
-                                                                "Content-Length": "\(components[0].lengthOfBytes(using: .utf8))"
+                                                                "Content-Length": "\(responseString.lengthOfBytes(using: .utf8))"
                                                              ]) else {
                         let error = self.error(code: 500, description: "Failed to create HTTP response")
                         if self.isTaskActive(schemeTask) {
@@ -428,7 +448,7 @@ class PHPSchemeHandler: NSObject, WKURLSchemeHandler {
                     if self.isTaskActive(schemeTask) {
                         schemeTask.didReceive(httpResponse)
 
-                        if let data = components[0].data(using: .utf8) {
+                        if let data = responseString.data(using: .utf8) {
                             schemeTask.didReceive(data)
                         }
 
@@ -440,8 +460,15 @@ class PHPSchemeHandler: NSObject, WKURLSchemeHandler {
                     return
                 }
 
-                let headerString = components[0]
-                let bodyString = components[1]
+                let headerString = responseParts.headers
+                let bodyString = responseParts.body
+
+                DebugLogger.shared.log(
+                    "🌐 raw PHP response split=\(responseParts.separator) totalBytes=\(responseString.lengthOfBytes(using: .utf8)) headerBytes=\(headerString.lengthOfBytes(using: .utf8)) bodyBytes=\(bodyString.lengthOfBytes(using: .utf8))"
+                )
+                DebugLogger.shared.log(
+                    "🌐 raw PHP headers preview: \(headerString.prefix(220).replacingOccurrences(of: "\r", with: "\\r").replacingOccurrences(of: "\n", with: "\\n"))"
+                )
 
                 // Parse headers into a dictionary (case-insensitive keys)
                 var headers: [String: String] = [:]
@@ -475,6 +502,10 @@ class PHPSchemeHandler: NSObject, WKURLSchemeHandler {
                 let isHtmlResponse = contentType.contains("text/html")
                 let isJsonResponse = contentType.contains("application/json")
                 let isSuccessResponse = (200...299).contains(statusCode)
+
+                DebugLogger.shared.log(
+                    "🌐 parsed PHP response status=\(statusCode) contentType=\(contentType.isEmpty ? "(none)" : contentType)"
+                )
 
                 if (isHtmlResponse || isJsonResponse) && isSuccessResponse {
                     if let nativeUIJson = headers["x-native-ui"] {

@@ -68,6 +68,7 @@ class BuildIosAppCommand extends Command
         // Clear the last log
         file_put_contents($this->logPath, '');
 
+        $this->syncIosHostAppSources();
         $this->bundleLaravelApp();
 
         if (! getenv('NATIVEPHP_XCODE_BUILD')) {
@@ -108,8 +109,52 @@ class BuildIosAppCommand extends Command
         });
 
         $this->components->task('Removing unnecessary files', fn () => $this->removeUnnecessaryFiles());
+        $this->materializeNativePhpMobileForIosBundle($this->appPath);
         $this->cleanEnvFile($this->appPath.'.env');
         $this->createAppZip();
+    }
+
+    /**
+     * Keep the generated local Xcode host app in sync with the package Swift sources.
+     * `native:run ios` builds files from `nativephp/ios/NativePHP`, not directly from vendor.
+     */
+    private function syncIosHostAppSources(): void
+    {
+        $source = base_path('vendor/nativephp/mobile/resources/xcode/NativePHP');
+        $destination = $this->containerPath;
+
+        if (! is_dir($source)) {
+            return;
+        }
+
+        File::deleteDirectory($destination);
+        File::ensureDirectoryExists($destination);
+        File::copyDirectory($source, $destination);
+    }
+
+    /**
+     * Composer path repositories install {@see \Composer} packages under {@code vendor/} as symlinks
+     * to {@code packages/…}. The embedded PHP runtime on iOS does not resolve those symlinks in the
+     * app sandbox, so {@code vendor/nativephp/mobile/bootstrap/ios/native.php} must be a real tree.
+     */
+    private function materializeNativePhpMobileForIosBundle(string $appPath): void
+    {
+        $packagesPath = $appPath.'packages/nativephp/mobile';
+        $vendorPath = $appPath.'vendor/nativephp/mobile';
+
+        if (! is_dir($packagesPath)) {
+            return;
+        }
+
+        if (is_link($vendorPath)) {
+            File::delete($vendorPath);
+        } elseif (is_dir($vendorPath)) {
+            File::deleteDirectory($vendorPath);
+        } elseif (file_exists($vendorPath)) {
+            File::delete($vendorPath);
+        }
+
+        File::copyDirectory($packagesPath, $vendorPath);
     }
 
     private function configureXcodeProject(): bool
@@ -172,7 +217,8 @@ class BuildIosAppCommand extends Command
         $destination = $this->appPath;
 
         // Make sure we clear out any old version
-        shell_exec("rm -rf {$destination}/*");
+        File::deleteDirectory($destination);
+        File::ensureDirectoryExists($destination);
 
         $source = rtrim(str_replace('\\', '/', base_path()), '/').'/';
 

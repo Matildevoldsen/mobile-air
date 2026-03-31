@@ -2,6 +2,49 @@ import SwiftUI
 import WebKit
 import ObjectiveC.runtime
 
+struct NativeDebugOverlay: View {
+    @ObservedObject private var appState = AppState.shared
+
+    let source: String
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            ScrollView {
+                Text(debugText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.green)
+                    .textSelection(.enabled)
+                    .padding(10)
+            }
+            .frame(width: 370, height: 300, alignment: .topLeading)
+            .background(Color.black.opacity(0.85))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.green.opacity(0.35), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 4)
+            .padding(.top, 52)
+            .padding(.leading, 12)
+        }
+    }
+
+    private var debugText: String {
+        let startupFailure = appState.startupFailure ?? "(none)"
+
+        return """
+        NativePHP DEBUG HUD [\(source)]
+        isReadyToLoad=\(appState.isReadyToLoad)
+        isInitialized=\(appState.isInitialized)
+        startupFailure=\(startupFailure)
+
+        Recent logs:
+        \(DebugLogger.shared.snapshot(lines: 30))
+        """
+    }
+}
+
 private final class KeyboardAccessoryHider: NSObject {
     @objc var noInputAccessoryView: Any? {
         nil
@@ -235,12 +278,18 @@ struct WebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            DebugLogger.shared.log("🌐 didCommit url=\(webView.url?.absoluteString ?? "unknown")")
             // Inject safe area insets IMMEDIATELY when navigation commits (before rendering)
             // This is the iOS equivalent of Android's onPageStarted
             injectSafeAreaInsets(webView)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            DebugLogger.shared.log(
+                "🌐 didFinish url=\(webView.url?.absoluteString ?? "unknown") title=\(webView.title ?? "(nil)")"
+            )
+            logPageSnapshot(webView, reason: "didFinish")
+
             // On first load, dismiss the splash screen
             if !hasCompletedInitialLoad {
                 hasCompletedInitialLoad = true
@@ -317,8 +366,45 @@ struct WebView: UIViewRepresentable {
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
 
+        private func logPageSnapshot(_ webView: WKWebView, reason: String) {
+            let js = """
+            (function() {
+                var body = document.body;
+                var app = document.getElementById('app');
+
+                return JSON.stringify({
+                    href: window.location.href,
+                    title: document.title || '',
+                    readyState: document.readyState || '',
+                    bodyChildCount: body ? body.children.length : -1,
+                    bodyTextLength: body && body.innerText ? body.innerText.length : 0,
+                    bodyHtmlLength: body && body.innerHTML ? body.innerHTML.length : 0,
+                    appExists: !!app,
+                    appChildCount: app ? app.children.length : -1,
+                });
+            })();
+            """
+
+            webView.evaluateJavaScript(js) { result, error in
+                if let error {
+                    DebugLogger.shared.log("🌐 page snapshot failed [\(reason)]: \(error.localizedDescription)")
+                    return
+                }
+
+                if let snapshot = result as? String {
+                    DebugLogger.shared.log("🌐 page snapshot [\(reason)]: \(snapshot)")
+                } else {
+                    DebugLogger.shared.log("🌐 page snapshot [\(reason)]: (non-string result)")
+                }
+            }
+        }
+
         private func showWebViewFailureOverlay(title: String, message: String) {
             print("⚠️ \(title): \(message)")
+            DebugLogger.shared.log("⚠️ \(title): \(message)")
+            Task { @MainActor in
+                AppState.shared.reportStartupFailure(title: title, detail: message)
+            }
 
             DispatchQueue.main.async {
                 guard let scene = UIApplication.shared.connectedScenes
@@ -696,14 +782,61 @@ struct WebView: UIViewRepresentable {
         let userContentController = webView.configuration.userContentController
         let consoleLoggingScript = """
         (function() {
+            function post(type, message) {
+                try {
+                    window.webkit.messageHandlers.console.postMessage({ type: type, message: message });
+                } catch (e) {
+                    // ignore native bridge logging failures
+                }
+            }
+
+            function stringify(value) {
+                if (typeof value === 'string') {
+                    return value;
+                }
+
+                try {
+                    return JSON.stringify(value);
+                } catch (error) {
+                    return String(value);
+                }
+            }
+
             function capture(type) {
                 var old = console[type];
                 console[type] = function() {
-                    var message = Array.prototype.slice.call(arguments).join(" ");
-                    window.webkit.messageHandlers.console.postMessage({ type: type, message: message });
+                    var message = Array.prototype.slice.call(arguments).map(stringify).join(" ");
+                    post(type, message);
                     old.apply(console, arguments);
                 };
             }
+
+            window.addEventListener('error', function(event) {
+                post(
+                    'error',
+                    '[window.error] ' + (event.message || 'Unknown error')
+                        + ' @ ' + (event.filename || '(inline)')
+                        + ':' + (event.lineno || 0)
+                        + ':' + (event.colno || 0)
+                );
+            });
+
+            window.addEventListener('unhandledrejection', function(event) {
+                var reason = event.reason;
+                post('error', '[unhandledrejection] ' + stringify(reason));
+            });
+
+            document.addEventListener('DOMContentLoaded', function() {
+                var app = document.getElementById('app');
+                post(
+                    'debug',
+                    '[DOMContentLoaded] title=' + (document.title || '')
+                        + ' href=' + window.location.href
+                        + ' bodyChildren=' + (document.body ? document.body.children.length : -1)
+                        + ' appExists=' + (!!app)
+                );
+            });
+
             ['log', 'warn', 'error', 'debug'].forEach(capture);
         })();
         """
@@ -790,6 +923,7 @@ class ConsoleLogger: NSObject, WKScriptMessageHandler {
         if let body = message.body as? [String: Any],
            let type = body["type"] as? String,
            let logMessage = body["message"] as? String {
+            DebugLogger.shared.log("JS \(type): \(logMessage)")
             print()
             print("JS \(type): \(logMessage)")
         }

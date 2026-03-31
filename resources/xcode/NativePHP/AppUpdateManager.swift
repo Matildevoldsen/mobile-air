@@ -50,14 +50,18 @@ class AppUpdateManager {
     }
 
     private func hasApp() -> Bool {
-        let envFile = appPath + "/.env"
-
-        if FileManager.default.fileExists(atPath: envFile) {
-            print("📦 An app bundle has already been extracted");
+        if isValidApp(at: appPath) {
+            print("📦 A valid app bundle has already been extracted")
             return true
         }
 
-        print("📦 No app bundle extracted!");
+        if FileManager.default.fileExists(atPath: appPath + "/.env") {
+            print("⚠️ Existing extracted app is incomplete - forcing re-extraction")
+            try? FileManager.default.removeItem(atPath: appPath)
+            try? FileManager.default.createDirectory(atPath: appPath, withIntermediateDirectories: true)
+        } else {
+            print("📦 No app bundle extracted!")
+        }
 
         return false
     }
@@ -88,6 +92,14 @@ class AppUpdateManager {
 
             // Create installed.version file after successful extraction
             createInstalledVersionFile()
+
+            guard isValidApp(at: appPath) else {
+                throw NSError(
+                    domain: "AppUpdateManager",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Extracted bundled app is missing required NativePHP bootstrap files"]
+                )
+            }
 
             // Run migrations and clear caches for newly extracted app
             runMigrationsAndClearCaches()
@@ -225,11 +237,14 @@ class AppUpdateManager {
     private func isValidApp(at path: String) -> Bool {
         let envFile = path + "/.env"
         let vendorDir = path + "/vendor"
-        let bootstrapFile = path + "/vendor/nativephp/mobile-lite/bootstrap/ios/native.php"
+        let bootstrapPaths = [
+            path + "/vendor/nativephp/mobile/bootstrap/ios/native.php",
+            path + "/vendor/nativephp/mobile-lite/bootstrap/ios/native.php"
+        ]
 
         return FileManager.default.fileExists(atPath: envFile) &&
                FileManager.default.fileExists(atPath: vendorDir) &&
-               FileManager.default.fileExists(atPath: bootstrapFile)
+               bootstrapPaths.contains(where: { FileManager.default.fileExists(atPath: $0) })
     }
 
     @discardableResult

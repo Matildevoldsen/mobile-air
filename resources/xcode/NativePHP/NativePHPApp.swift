@@ -140,7 +140,7 @@ struct NativePHPApp: App {
                         .onAppear {
                             // Phase 1: Start deferred initialization on a background thread
                             // This runs AFTER the splash view is visible, avoiding watchdog timeout
-                            DispatchQueue.global(qos: .userInitiated).async {
+                            appState.startDeferredInitialization {
                                 performDeferredInitialization()
                             }
                         }
