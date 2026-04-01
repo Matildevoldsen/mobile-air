@@ -68,6 +68,10 @@ class BuildIosAppCommand extends Command
         // Clear the last log
         file_put_contents($this->logPath, '');
 
+        if (! $this->ensureFreshWebAssets()) {
+            return Command::FAILURE;
+        }
+
         $this->syncIosHostAppSources();
         $this->bundleLaravelApp();
 
@@ -81,6 +85,33 @@ class BuildIosAppCommand extends Command
         }
 
         return Command::SUCCESS;
+    }
+
+    private function ensureFreshWebAssets(): bool
+    {
+        $successful = false;
+
+        $this->components->task('Building Vite assets', function () use (&$successful) {
+            $result = Process::path(base_path())
+                ->forever()
+                ->run(['npm', 'run', 'build'], function ($type, $output) {
+                    file_put_contents($this->logPath, $output, FILE_APPEND);
+
+                    if ($this->verbose) {
+                        $this->output->write($output);
+                    }
+                });
+
+            $successful = $result->successful();
+
+            if (! $successful) {
+                error('Vite build failed.');
+            }
+
+            return $successful;
+        });
+
+        return $successful;
     }
 
     private function bundleLaravelApp(): void
